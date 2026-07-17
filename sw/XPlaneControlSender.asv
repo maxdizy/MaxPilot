@@ -8,6 +8,7 @@ classdef XPlaneControlSender < matlab.System
 
     properties (Access = private)
         URL
+        sampleTime = 0.02;
 
         % dataref IDs
         aileronID
@@ -20,20 +21,26 @@ classdef XPlaneControlSender < matlab.System
         
         % control surface max and min deflections (deg)
         % Cirrus SR22
-        aileronMax = 20;
-        aileronMin = -20;
+        aileronMax = 10;
+        aileronMin = -10; % actually -30 but keeping symmetry
         elevatorMax = 20;
-        elevatorMin = -20;
-        rudderMax = 20;
-        rudderMin = -20;
+        elevatorMin = -25;
+        rudderMax = 15;
+        rudderMin = -15;
+
+        % actuator states
+        aileronState = 0;
+        elevatorState = 0;
+        rudderState = 0;
+
+        % actuator rate limit (deg/s)
+        actuatorRateLimit = 60;
     end
 
     methods (Access = protected)
         function setupImpl(obj)
             obj.URL = "http://127.0.0.1:8086/api/v3";
 
-            % indices need to be adjusted per aircraft
-            % Cirrus SR-22
             obj.aileronID = obj.getID("sim/flightmodel2/wing/aileron1_deg");
             obj.elevatorID = obj.getID("sim/flightmodel2/wing/elevator1_deg");
             obj.rudderID = obj.getID("sim/flightmodel2/wing/rudder1_deg");
@@ -42,28 +49,26 @@ classdef XPlaneControlSender < matlab.System
             obj.overrideControlID = obj.getID("sim/operation/override/override_control_surfaces");
             obj.overrideJoystickID = obj.getID("sim/operation/override/override_joystick");
 
-            obj.setDREF(obj.overrideControlID, 1, false);
-            obj.setDREF(obj.overrideJoystickID, 1, false);
+            % obj.setDREF(obj.overrideControlID, 1, false);
+            % obj.setDREF(obj.overrideJoystickID, 0, false);
         end
 
         function stepImpl(obj, u)
-            % inputs
-            aileronCmd = max(min(u(1),1),-1);
-            elevatorCmd = max(min(u(2),1),-1);
-            rudderCmd = max(min(u(3),1),-1);
+            aileron = max(min(u(1),obj.aileronMax),obj.aileronMin);
+            elevator = max(min(u(2),obj.elevatorMax),obj.elevatorMin) * -1; % flip direction
+            rudder = max(min(u(3),obj.rudderMax),obj.rudderMin);
             throttle = max(min(u(4),1),0);
 
-            % convert to degrees
-            aileronDeg = aileronCmd*obj.aileronMax;
-            elevatorDeg = elevatorCmd*obj.elevatorMax;
-            rudderDeg = rudderCmd*obj.rudderMax;
-
-            % send commands
-            obj.setDREF(obj.aileronID, aileronDeg, true, 0);
-            obj.setDREF(obj.aileronID, -aileronDeg, true, 1);
-            obj.setDREF(obj.elevatorID, elevatorDeg, true, 8);
-            obj.setDREF(obj.rudderID, rudderDeg, true, 10);
+            % send commands -- indices need to be adjusted per aircraft
+            % Cirrus SR-22
+            obj.setDREF(obj.aileronID, aileron, true, true, 4);
+            obj.setDREF(obj.elevatorID, elevator, true, false, 8);
+            obj.setDREF(obj.rudderID, rudder, true, false, 10);
             obj.setDREF(obj.throttleID, throttle, false);
+
+            % temp send overrides
+            obj.setDREF(obj.overrideControlID, 0, false);
+            obj.setDREF(obj.overrideJoystickID, 0, false);
         end
     end
 
@@ -79,23 +84,24 @@ classdef XPlaneControlSender < matlab.System
         end
 
         % send commands to X-Plane REST API
-        function setDREF(obj, id, value, isArray, index)
+        function setDREF(obj, id, value, isAileron, isElevator, isRudder index)
             coder.extrinsic('webread');
             coder.extrinsic('webwrite');
             coder.extrinsic('weboptions');
 
             body = struct();
-            if isArray 
-                result = webread(obj.URL + "/datarefs/" + string(id) + "/value");
-                current = result.data;
-                current.data(index+1) = value;
+            if isRudder
+                body.data = zeros(48,1);
+            elseif isElevator
+                body.data(index+1) = value;
+            elseif isAileron
+                body.data(index+2) = -value; 
             else
                 body.data = value;
             end
 
-            options = weboptions(...
-                'RequestMethod', 'patch', ...
-                'MediaType', 'application/json');
+            options = weboptions('RequestMethod', 'patch', ...
+                                'MediaType', 'application/json');
 
             webwrite(obj.URL + "/datarefs/" + string(id) + "/value", body, options);
         end
@@ -120,7 +126,7 @@ classdef XPlaneControlSender < matlab.System
         end
 
         function sts = getSampleTimeImpl(obj)
-            sts = createSampleTime(obj, "Type", "Discrete", "SampleTime", 0.02);
+            sts = createSampleTime(obj, "Type", "Discrete", "SampleTime", obj.sampleTime);
         end
     end
 end

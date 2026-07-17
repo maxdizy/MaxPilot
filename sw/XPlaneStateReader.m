@@ -16,6 +16,7 @@ classdef XPlaneStateReader < matlab.System
 
     properties (Access = private)
         URL
+        sampleTime = 0.02;
 
         lat0
         lon0
@@ -150,7 +151,7 @@ classdef XPlaneStateReader < matlab.System
         end
         
         function sts = getSampleTimeImpl(obj)
-            sts = createSampleTime(obj, "Type", "Discrete", "SampleTime", 0.02);
+            sts = createSampleTime(obj, "Type", "Discrete", "SampleTime", obj.sampleTime);
         end
     end
 end
