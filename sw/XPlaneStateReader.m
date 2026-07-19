@@ -31,9 +31,12 @@ classdef XPlaneStateReader < matlab.System
         pID
         qID
         rID
-        uID
-        vID
-        wID
+        % uID
+        % vID
+        % wID
+        tasID
+        aID
+        bID
 
         R = 6378137;
     end
@@ -54,9 +57,12 @@ classdef XPlaneStateReader < matlab.System
             obj.qID = obj.getID("sim/flightmodel/position/Q");
             obj.rID = obj.getID("sim/flightmodel/position/R");
 
-            obj.uID = obj.getID("sim/flightmodel/position/local_vx");
-            obj.vID = obj.getID("sim/flightmodel/position/local_vy");
-            obj.wID = obj.getID("sim/flightmodel/position/local_vz");
+            % obj.uID = obj.getID("sim/flightmodel/position/local_vx");
+            % obj.vID = obj.getID("sim/flightmodel/position/local_vy");
+            % obj.wID = obj.getID("sim/flightmodel/position/local_vz");
+            obj.tasID = obj.getID("sim/flightmodel/position/true_airspeed");
+            obj.aID = obj.getID("sim/flightmodel/position/alpha");
+            obj.bID = obj.getID("sim/flightmodel/position/beta");
 
             obj.lat0 = obj.getDREF(obj.latID);
             obj.lon0 = obj.getDREF(obj.lonID);
@@ -85,9 +91,12 @@ classdef XPlaneStateReader < matlab.System
             q = obj.getDREF(obj.qID);
             r = obj.getDREF(obj.rID);
 
-            u = obj.getDREF(obj.uID);
-            v = obj.getDREF(obj.vID);
-            w = obj.getDREF(obj.wID);
+            tas = obj.getDREF(obj.tasID);
+            a = obj.getDREF(obj.aID);
+            b = obj.getDREF(obj.bID);
+            u = tas * cos(pi/180 * a) * cos(pi/180 * b);
+            v = tas * sin(pi/180 * b);
+            w = tas * sin(pi/180 * a) * cos(pi/180 * b);
 
             state = [
                 u;
@@ -150,8 +159,8 @@ classdef XPlaneStateReader < matlab.System
             out = true;
         end
         
-        function sts = getSampleTimeImpl(obj)
-            sts = createSampleTime(obj, "Type", "Discrete", "SampleTime", obj.sampleTime);
-        end
+        % function sts = getSampleTimeImpl(obj)
+        %     sts = createSampleTime(obj, "Type", "Discrete", "SampleTime", obj.sampleTime);
+        % end
     end
 end

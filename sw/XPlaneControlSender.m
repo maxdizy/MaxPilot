@@ -67,8 +67,8 @@ classdef XPlaneControlSender < matlab.System
             obj.setDREF(obj.throttleID, throttleCmd, false, false, false);
 
             % % temp send overrides
-            % obj.setDREF(obj.overrideControlID, 0, false);
-            % obj.setDREF(obj.overrideJoystickID, 0, false);
+            % obj.setDREF(obj.overrideControlID, 0, false, false, false);
+            % obj.setDREF(obj.overrideJoystickID, 0, false, false, false);
         end
     end
 
@@ -108,6 +108,7 @@ classdef XPlaneControlSender < matlab.System
                 delta = max(min(delta, obj.actuatorRateLimit * obj.sampleTime), -(obj.actuatorRateLimit * obj.sampleTime));
                 obj.aileronState = obj.aileronState + delta;
                 body.data(index+1) = obj.aileronState;
+                body.data(index+2) = -obj.aileronState;
             else
                 body.data = value;
             end
@@ -137,8 +138,8 @@ classdef XPlaneControlSender < matlab.System
             in = true;
         end
 
-        function sts = getSampleTimeImpl(obj)
-            sts = createSampleTime(obj, "Type", "Discrete", "SampleTime", obj.sampleTime);
-        end
+        % function sts = getSampleTimeImpl(obj)
+        %     sts = createSampleTime(obj, "Type", "Discrete", "SampleTime", obj.sampleTime);
+        % end
     end
 end
