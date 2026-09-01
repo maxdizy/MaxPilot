@@ -27,10 +27,10 @@ function [rho, P_a, P_ref, g, speed_of_sound] = atmosphere(alt)
     speed_of_sound = sqrt(gamma*R*T);
 end
 
-function [F_Pref, m, X_cm, I_x, I_y, I_z, C_A, C_N, C_m, C_n, C_l, C_lp, C_mq, C_nr] = burn(t)
+function [F_Pref, m, d, S, X_cm, I_x, I_y, I_z, C_A, C_N, C_m, C_n, C_l, C_lp, C_mq, C_nr] = burn(t, mach, AoA)
     % for the Cesaroni 614I100-17A motor
 
-    persistent time_points thrust_forces mass_total CG_points I_rot I_long C_Axial C_Normal C_Pitch C_Yaw C_Roll C_RollDamp C_PitchDamp
+    persistent time_points thrust_forces mass_total reference_length reference_area CG_points I_rot I_long C_Axial C_Normal C_Pitch C_Yaw C_Roll C_RollDamp C_PitchDamp
     if isempty(time_points)
         filename = 'MaxRocket_OpenRocket_analysis.csv';
         
@@ -40,6 +40,8 @@ function [F_Pref, m, X_cm, I_x, I_y, I_z, C_A, C_N, C_m, C_n, C_l, C_lp, C_mq, C
         time_points = data_table.('# Time (s)');
         thrust_forces = data_table.('Thrust (N)');
         mass_total = data_table.('Mass (kg)');
+        reference_length = data_table.('Reference length (m)');
+        reference_area = data_table.('Reference area (mÂ²)');
         CG_points = data_table.('CG location (m)');
         
         I_rot = data_table.('Rotational moment of inertia (kg·m²)');
@@ -57,6 +59,8 @@ function [F_Pref, m, X_cm, I_x, I_y, I_z, C_A, C_N, C_m, C_n, C_l, C_lp, C_mq, C
     if t < time_points(1)
         F_Pref = thrust_forces(1);
         m = mass_total(1);
+        d = reference_length(1);
+        S = reference_area(1);
         X_cm = CG_points(1);
         I_x = I_rot(1);
         I_y = I_long(1);
@@ -73,6 +77,8 @@ function [F_Pref, m, X_cm, I_x, I_y, I_z, C_A, C_N, C_m, C_n, C_l, C_lp, C_mq, C
     elseif t <= time_points(end)
         F_Pref = interp1(time_points, thrust_forces, t, 'linear'); % reference thrust force, N
         m = interp1(time_points, mass_total, t, 'linear'); % rocket mass, Kg
+        d = interp1(time_points, reference_length, t, 'linear'); % aerodynamic reference length of body, m
+        S = interp1(time_points, reference_area, t, 'linear'); % reference area m^2
         X_cm = interp1(time_points, CG_points, t, 'linear'); %  instantaneous distance from rocket nose to center of mass, m
         I_x = interp1(time_points, I_rot, t, 'linear'); % inertia on the x axis, Kg*m^2
         I_y = interp1(time_points, I_long, t, 'linear'); % inertia on the y axis, Kg*m^2
@@ -107,36 +113,40 @@ end
 function [u_dot, v_dot, w_dot, p_dot, q_dot, r_dot, phi_dot, theta_dot, psi_dot] = rocket_physics(x, u_ctrl, t)
     %% missile variables
     u = x(1); v = x(2); w = x(3); p = x(4); q = x(5); r = x(6); phi = x(7); theta = x(8); psi = x(9); alt = x(10);
-    delta_r = u_ctrl(1); delta_eta = u_ctrl(2); delta_xi = u_ctrl(3);
-    [F_Pref, m, X_cm, I_x, I_y, I_z, C_A, C_N, ~, ~, ~, C_lp, C_mq, C_nr] = burn(t);
+    delta_eta = u_ctrl(1); delta_xi = u_ctrl(2);
     [rho, P_a, P_ref, g, speed_of_sound] = atmosphere(alt);
-    d = 0.064; % aerodynamic reference length of body, m
-    S = (math.pi*d^2)/4; % reference area m^2
+    V_M = sqrt(u^2 + v^2 + w^2); % magnitude of velocity vector of the center of mass of the rocket
+    mach = V_M/speed_of_sound; % mach number
+    AoA = arctan(w/u); % angle of attack
+    AoS = arcsin(v/V_M); % angle of sideslip
     X_ref = 0; % distance from rocket nose to reference moment station, m
     A_e = 0; % rocket nozzle exit area, m^2 (0 b/c pressure-thrust variance is negligible for this model)
-    V_M = sqrt(u^2 + v^2 + w^2); % magnitude of velocity vector of the center of mass of the rocket
-    a = arctan(w/u); % angle of attack
-    b = arcsin(v/V_M); % angle of sideslip
     
+    [F_Pref, m, d, S, X_cm, I_x, I_y, I_z, C_A, C_N, ~, ~, ~, C_lp, C_mq, C_nr] = burn(t, mach, AoA);
+    [C_leta, C_lxi, C_meta, C_mxi, C_neta, C_nxi, C_ma, C_nb] = find_active_control_variables(mach);
+
     %% missile aerodynamic coefficients
     % find roll moment coefficient
-    C_ldelta % slope of curve formed by C_l vs delta (control surface deflection), rad^-1
-    C_l = C_ldelta*delta_r + (d/(2*V_M))*C_lp*p; % roll moment coefficient
+    % C_ldelta % slope of curve formed by C_l vs delta (control surface deflection), rad^-1
+    % C_l = C_ldelta*delta_r + (d/(2*V_M))*C_lp*p; % roll moment coefficient
+    C_l = C_leta*delta_eta + C_lxi*delta_xi + (d/(2*V_M))*C_lp*p; % roll moment coefficient
 
     % find pitch moment coefficient
-    C_ma = 0;% slope of the curve formed by C_m vs AoA a, rad_1 (assuming 0 b/c negligible for this model)
-    C_mdelta % slope of the curve formed by C_m vs delta for pitch, rad_1
-    C_mref = C_ma*a + C_mdelta*delta_eta; % considering a fin deflection rocket
+    % C_ma % slope of the curve formed by C_m vs AoA a, rad_1
+    % C_mdelta % slope of the curve formed by C_m vs delta for pitch, rad_1
+    % C_mref = C_ma*AoA + C_mdelta*delta_eta; % considering a fin deflection rocket
+    C_mref = C_ma*AoA + C_meta*delta_eta + C_mxi*delta_xi; % considering a fin deflection rocket
     C_Nz = C_N * 1/(sqrt(v^2 + w^2)); % normal force coefficient on Zb axis
-    C_ma_dot % pitch damping derivative relative to AoA rate a_dot (slope of C_a vs a), rad_-1
+    C_ma_dot = 0; % pitch damping derivative relative to AoA rate a_dot (slope of C_a vs a), rad_-1 (assuming 0 b/c negligible for this model)
     C_m = C_mref - C_Nz*((X_cm - X_ref)/d) + (d/(2*V_M))*(C_mq + C_ma_dot)*q; % pitch moment coefficient
     
     % find yaw moment coefficient
-    C_nb = 0; % slope of the curve formed by C_m vs AoS b, rad_1 (assuming 0 b/c negligible for this model)
-    C_ndelta % slope of the curve formed by C_m vs delta for yaw, rad_1
-    C_nref = C_nb*b + C_ndelta*delta_xi; % considering a fin deflection rocket
+    % C_nb  % slope of the curve formed by C_m vs AoS b, rad_1
+    % C_ndelta % slope of the curve formed by C_m vs delta for yaw, rad_1
+    % C_nref = C_nb*AoS + C_ndelta*delta_xi; % considering a fin deflection rocket
+    C_nref = C_nb*AoS + C_neta*delta_eta + C_nxi*delta_xi; % considering a fin deflection rocket
     C_Ny = C_N * (-v)/(sqrt(v^2 + w^2)); % normal force coefficient on Yb axis
-    C_nb_dot % pitch damping derivative relative to AoS rate b_dot (slope of C_b vs b), rad_-1
+    C_nb_dot = 0; % pitch damping derivative relative to AoS rate b_dot (slope of C_b vs b), rad_-1 (assuming 0 b/c negligible for this model)
     C_n = C_nref + C_Ny*((X_cm - X_ref)/d) + (d/(2*V_M))*(C_nr + C_nb_dot)*r; % yaw moment coefficient  
 
     % transform from earth frame to body frame with:

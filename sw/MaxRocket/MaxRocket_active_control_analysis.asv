@@ -1,0 +1,156 @@
+files = { ...
+    'MaxRocket_OpenRocket_eta_0_xi_0.csv', ...
+    'MaxRocket_OpenRocket_eta_2_xi_0.csv', ...
+    'MaxRocket_OpenRocket_eta_2_xi_2.csv', ...
+    'MaxRocket_OpenRocket_eta_2_xi_4.csv', ...
+    'MaxRocket_OpenRocket_eta_2_xi_6.csv', ...
+    'MaxRocket_OpenRocket_eta_2_xi_8.csv', ...
+    'MaxRocket_OpenRocket_eta_2_xi_10.csv', ...
+    'MaxRocket_OpenRocket_eta_4_xi_0.csv', ...
+    'MaxRocket_OpenRocket_eta_4_xi_10.csv', ...
+    'MaxRocket_OpenRocket_eta_8_xi_0.csv', ...
+    'MaxRocket_OpenRocket_eta_8_xi_10.csv', ...
+    'MaxRocket_OpenRocket_eta_10_xi_0.csv', ...
+    'MaxRocket_OpenRocket_eta_10_xi_10.csv'};
+
+% [C_ldelta, C_mdelta, C_ndelta, C_ma, C_nb] = active_control_analysis(files);
+active_control_analysis(files);
+
+function active_control_analysis(files)
+
+    % OUTPUT: struct 'derivs' with fields:
+    %   mach_grid      - Mach bin centers, length N
+    %   B_aero         - 3 x 2 x N array. B_aero(:,:,i) = [dCl/deta dCl/dxi;
+    %                     dCm/deta dCm/dxi; dCn/deta dCn/dxi] at mach_grid(i).
+    %                     This is your control effectiveness matrix: given a
+    %                     commanded [eta; xi] (radians), B_aero(:,:,i)*[eta;xi]
+    %                     gives the resulting [Cl; Cm; Cn] perturbation at
+    %                     that Mach. Feed this directly into your B matrix
+    %                     construction instead of assuming a diagonal
+    %                     eta-to-pitch-only, xi-to-yaw-only structure.
+    %   Cl_deta_table, Cl_dxi_table, Cm_deta_table, Cm_dxi_table,
+    %   Cn_deta_table, Cn_dxi_table - the same six values, unpacked as
+    %                     individual 1xN vectors for convenience/plotting.
+    %   Cma_table, Cnb_table - static stability derivatives from the natural
+    %                     AoA variation within the eta=0,xi=0 baseline flight
+    %                     alone (single-flight approximation, same caveat as
+    %                     before). Cnb_table = Cma_table by symmetry.
+    %
+    % Saves the result to fin_control_effectiveness.mat.
+
+    mach_bin_edges = 0:0.05:0.4;
+    mach_grid = mach_bin_edges(1:end-1) + diff(mach_bin_edges)/2;
+    n_bins = length(mach_grid);
+
+    Mach_pts = []; eta_pts = []; xi_pts = []; Cl_pts = []; Cm_pts = []; Cn_pts = [];
+    baseline_file = '';
+
+    for i = 1:numel(files)
+        [eta_deg, xi_deg] = parse_eta_xi(files{i});
+        if eta_deg == 0 && xi_deg == 0
+            baseline_file = files{i};
+        end
+
+        opts = detectImportOptions(files{i}, 'VariableNamingRule', 'preserve');
+        T = readtable(files{i}, opts);
+        n = height(T);
+
+        Mach_pts = [Mach_pts; get_column(T, 'Mach number')];
+        Cl_pts   = [Cl_pts; fillmissing(get_column(T, 'Roll moment coefficient'),  'constant', 0)];
+        Cm_pts   = [Cm_pts; fillmissing(get_column(T, 'Pitch moment coefficient'), 'constant', 0)];
+        Cn_pts   = [Cn_pts; fillmissing(get_column(T, 'Yaw moment coefficient'),   'constant', 0)];
+        eta_pts  = [eta_pts; repmat(deg2rad(eta_deg), n, 1)];
+        xi_pts   = [xi_pts; repmat(deg2rad(xi_deg),  n, 1)];
+    end
+
+    if isempty(baseline_file)
+        error('fin_control_effectiveness:noBaseline', ...
+            'No eta=0, xi=0 baseline file found -- required for C_ma/C_nb.');
+    end
+
+    [Cl_deta_table, Cl_dxi_table] = fit_bivariate_by_mach(Mach_pts, eta_pts, xi_pts, Cl_pts, mach_bin_edges);
+    [Cm_deta_table, Cm_dxi_table] = fit_bivariate_by_mach(Mach_pts, eta_pts, xi_pts, Cm_pts, mach_bin_edges);
+    [Cn_deta_table, Cn_dxi_table] = fit_bivariate_by_mach(Mach_pts, eta_pts, xi_pts, Cn_pts, mach_bin_edges);
+
+    B_aero = nan(3, 2, n_bins);
+    for i = 1:n_bins
+        B_aero(:,:,i) = [Cl_deta_table(i), Cl_dxi_table(i);
+                          Cm_deta_table(i), Cm_dxi_table(i);
+                          Cn_deta_table(i), Cn_dxi_table(i)];
+    end
+
+    % --- Static derivative: natural AoA variation in the baseline flight only ---
+    opts = detectImportOptions(baseline_file, 'VariableNamingRule', 'preserve');
+    Tb = readtable(baseline_file, opts);
+    Mach_b = get_column(Tb, 'Mach number');
+    alpha_b = deg2rad(get_column(Tb, 'Angle of attack'));
+    Cm_b = fillmissing(get_column(Tb, 'Pitch moment coefficient'), 'constant', 0);
+    Cma_table = fit_slope_by_mach(Mach_b, alpha_b, Cm_b, mach_bin_edges);
+
+    derivs.mach_grid = mach_grid;
+    derivs.B_aero = B_aero;
+    derivs.Cl_deta_table = Cl_deta_table;
+    derivs.Cl_dxi_table = Cl_dxi_table;
+    derivs.Cm_deta_table = Cm_deta_table;
+    derivs.Cm_dxi_table = Cm_dxi_table;
+    derivs.Cn_deta_table = Cn_deta_table;
+    derivs.Cn_dxi_table = Cn_dxi_table;
+    derivs.Cma_table = Cma_table;
+    derivs.Cnb_table = Cma_table;   % axisymmetric assumption
+
+    save('fin_control_effectiveness.mat', '-struct', 'derivs');
+end
+
+function [eta_deg, xi_deg] = parse_eta_xi(filename)
+    tokens = regexp(filename, 'eta_(-?\d+)_xi_(-?\d+)', 'tokens');
+    if isempty(tokens)
+        error('fin_control_effectiveness:badFilename', ...
+            'Could not parse eta/xi from filename: %s', filename);
+    end
+    eta_deg = str2double(tokens{1}{1});
+    xi_deg  = str2double(tokens{1}{2});
+end
+
+function col = get_column(T, name_prefix)
+    vars = T.Properties.VariableNames;
+    idx = find(startsWith(vars, name_prefix));
+    if isempty(idx)
+        error('fin_control_effectiveness:columnNotFound', ...
+            'No column starting with "%s". Available columns:\n%s', name_prefix, strjoin(vars, ', '));
+    end
+    col = T.(vars{idx(1)});
+end
+
+function table_out = fit_slope_by_mach(Mach_pts, x_pts, y_pts, mach_bin_edges)
+    n_bins = length(mach_bin_edges) - 1;
+    table_out = nan(1, n_bins);
+    for i = 1:n_bins
+        mask = Mach_pts >= mach_bin_edges(i) & Mach_pts < mach_bin_edges(i+1);
+        if sum(mask) > 5 && range(x_pts(mask)) > 1e-6
+            p = polyfit(x_pts(mask), y_pts(mask), 1);
+            table_out(i) = p(1);
+        end
+    end
+end
+
+function [slope1_table, slope2_table] = fit_bivariate_by_mach(Mach_pts, x1_pts, x2_pts, y_pts, mach_bin_edges)
+    n_bins = length(mach_bin_edges) - 1;
+    slope1_table = nan(1, n_bins);
+    slope2_table = nan(1, n_bins);
+    for i = 1:n_bins
+        mask = Mach_pts >= mach_bin_edges(i) & Mach_pts < mach_bin_edges(i+1);
+        n_pts = sum(mask);
+        if n_pts > 10
+            X = [x1_pts(mask), x2_pts(mask), ones(n_pts,1)];
+            if rank(X) == 3
+                b = X \ y_pts(mask);
+                slope1_table(i) = b(1);
+                slope2_table(i) = b(2);
+            end
+        end
+    end
+end
+
+function [C_ldelta, C_mdelta, C_ndelta, C_ma, C_nb] = find_active_control_variables()
+
+end
